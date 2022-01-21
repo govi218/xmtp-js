@@ -92,29 +92,25 @@ export class Ciphertext {
         this.nonce = nonce;
     };
     // build Ciphertext from proto.Message
-    static fromDecoded(message: proto.Message): Ciphertext {
-        if (!message.payload) {
+    static fromDecoded(payload: proto.Payload): Ciphertext {
+        if (!payload) {
             throw new Error("missing message payload");
         }
-        if (!message.payload.aes256GcmHkdfSha256) {
+        if (!payload.aes256GcmHkdfSha256) {
             throw new Error("unrecognized message payload");
         };
-        const payload = message.payload.aes256GcmHkdfSha256;
-        return new Ciphertext(payload.payload, payload.hkdfSalt, payload.gcmNonce);
+        return new Ciphertext(
+            payload.aes256GcmHkdfSha256.payload,
+            payload.aes256GcmHkdfSha256.hkdfSalt,
+            payload.aes256GcmHkdfSha256.gcmNonce);
     }
     // build proto.Message from Ciphertext and the parties' KeyBundles.
-    toBeEncoded(sender: KeyBundle, recipient: KeyBundle): proto.Message {
+    toBeEncoded(): proto.Payload {
         return {
-            header: {
-                sender: sender.toBeEncoded(),
-                recipient: recipient.toBeEncoded(),
-            },
-            payload: {
-                aes256GcmHkdfSha256: {
-                    payload: this.payload,
-                    hkdfSalt: this.salt,
-                    gcmNonce: this.nonce
-                }
+            aes256GcmHkdfSha256: {
+                payload: this.payload,
+                hkdfSalt: this.salt,
+                gcmNonce: this.nonce
             }
         };
     };
@@ -176,7 +172,18 @@ export class PrivateKey {
     // Does the provided PublicKey correspnd to this PrivateKey?
     matches(key: PublicKey): boolean {
         return this.getPublicKey().equals(key);
-    }
+    };
+    toBeEncoded(): proto.PrivateKey {
+        return {
+            secp256k1: {
+                bytes: this.bytes
+            }
+        };
+    };
+    static fromDecoded(key: proto.PrivateKey): PrivateKey {
+        if(!key.secp256k1){throw new Error('unrecognized private key')};
+        return new PrivateKey(key.secp256k1.bytes);
+    };
 };
 
 // PublicKey respresents uncompressed secp256k1 public key,
@@ -269,12 +276,7 @@ export class PublicKey {
     };
     // is other the same/equivalent PublicKey?
     equals(other: PublicKey): boolean {
-        for (let i = 0; i < this.bytes.length; i++) {
-            if(this.bytes[i] !== other.bytes[i]) {
-                return false;
-            }
-        }
-        return true;
+        return equalBytes(this.bytes, other.bytes)
     };
 };
 
@@ -375,8 +377,13 @@ export class PrivateKeyBundle {
     async encodeMessage(recipient: KeyBundle, message: string): Promise<Uint8Array> {
         let bytes = new TextEncoder().encode(message);
         let ciphertext = await this.encrypt(bytes, recipient);
-        let toBeEncoded = ciphertext.toBeEncoded(this.getKeyBundle(), recipient);
-        return proto.Message.encode(toBeEncoded).finish()
+        return proto.Message.encode({
+            header: {
+                sender: this.getKeyBundle().toBeEncoded(),
+                recipient: recipient.toBeEncoded(),
+            },
+            payload: ciphertext.toBeEncoded()
+        }).finish()
     };
     // deserialize and decrypt the message;
     // throws if any part of the messages (including the header) was tampered with
@@ -385,15 +392,45 @@ export class PrivateKeyBundle {
         if(!message.header) { throw new Error("missing message header")};
         if(!message.header.sender) { throw new Error("missing message sender")};
         if(!message.header.recipient) { throw new Error("missing message recipient")};
-        const ciphertext = Ciphertext.fromDecoded(message);
         const sender = KeyBundle.fromDecoded(message.header.sender);
         const recipient = KeyBundle.fromDecoded(message.header.recipient);
         if (!this.preKey.matches(recipient.preKey)) {
             throw new Error("recipient pre-key mismatch");
         }
+        if(!message.payload) { throw new Error("missing message payload")};
+        const ciphertext = Ciphertext.fromDecoded(message.payload);
         bytes = await this.decrypt(ciphertext,sender);
         return new TextDecoder().decode(bytes);
     };
+    async encode(wallet: ethers.Signer): Promise<Uint8Array> {
+        // serialize the contents
+        const bytes = proto.PrivateKeyBundle.encode({
+            identityKey: this.identityKey.toBeEncoded(),
+            preKeys: [ this.preKey.toBeEncoded() ]
+        }).finish();
+        const wPreKey = getRandomValues(new Uint8Array(32));
+        const secret = hexToBytes(await wallet.signMessage(wPreKey));
+        const encrypted = await encrypt(bytes,secret);
+        return proto.EncryptedPrivateKeyBundle.encode({
+            walletPreKey: wPreKey,
+            payload: encrypted.toBeEncoded()
+        }).finish();
+    };
+    static async decode(wallet: ethers.Signer, bytes: Uint8Array): Promise<PrivateKeyBundle> {
+        const encrypted = proto.EncryptedPrivateKeyBundle.decode(bytes);
+        if(!encrypted.walletPreKey){throw new Error('missing wallet pre-key')};
+        const secret = hexToBytes(await wallet.signMessage(encrypted.walletPreKey));
+        if(!encrypted.payload) {throw new Error('missing bundle payload')};
+        const ciphertext = Ciphertext.fromDecoded(encrypted.payload);
+        const decrypted = await decrypt(ciphertext, secret);
+        const bundle = proto.PrivateKeyBundle.decode(decrypted)
+        if(!bundle.identityKey) { throw new Error('missing identity key')};
+        if(bundle.preKeys.length == 0) { throw new Error('missing pre-keys')};
+        return new PrivateKeyBundle(
+            PrivateKey.fromDecoded(bundle.identityKey),
+            PrivateKey.fromDecoded(bundle.preKeys[0]));
+    }
+
 };
 
 // Generate a new key bundle pair with the preKey signed byt the identityKey.
@@ -478,4 +515,13 @@ export function hexToBytes(s: string): Uint8Array {
       bytes[i] = Number.parseInt(s.slice(j, j+2), 16);
     };
     return bytes;
+};
+export function equalBytes(b1: Uint8Array, b2: Uint8Array): boolean {
+    if (b1.length != b2.length) { return false };
+    for (let i = 0; i < b1.length; i++) {
+        if(b1[i] !== b2[i]) {
+            return false;
+        }
+    }
+    return true;
 };
