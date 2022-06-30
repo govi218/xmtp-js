@@ -22,7 +22,18 @@ export default class ContactBundle implements proto.ContactBundleV1 {
   }
 
   static fromBytes(bytes: Uint8Array): ContactBundle {
-    const decoded = proto.ContactBundle.decode(bytes)
+    let decoded: proto.ContactBundle | undefined
+    try {
+      decoded = proto.ContactBundle.decode(bytes)
+    } catch (e) {
+      if (e instanceof RangeError) {
+        return this.fromBytesLegacy(bytes)
+      }
+
+      // Re-throw other errors
+      throw e
+    }
+
     if (!decoded.v1?.keyBundle?.identityKey) {
       throw new Error('missing keyBundle')
     }
@@ -33,6 +44,21 @@ export default class ContactBundle implements proto.ContactBundleV1 {
       new PublicKeyBundle(
         new PublicKey(decoded.v1?.keyBundle?.identityKey),
         new PublicKey(decoded.v1?.keyBundle?.preKey)
+      )
+    )
+  }
+
+  private static fromBytesLegacy(bytes: Uint8Array): ContactBundle {
+    const keyBundle = proto.PublicKeyBundle.decode(bytes)
+
+    if (!keyBundle?.preKey || !keyBundle?.identityKey) {
+      throw new Error('bad legacy key bundle')
+    }
+
+    return new ContactBundle(
+      new PublicKeyBundle(
+        new PublicKey(keyBundle?.identityKey),
+        new PublicKey(keyBundle?.preKey)
       )
     )
   }
