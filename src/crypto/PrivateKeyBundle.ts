@@ -144,30 +144,71 @@ export default class PrivateKeyBundle implements proto.PrivateKeyBundleV1 {
     wallet: ethers.Signer,
     bytes: Uint8Array
   ): Promise<PrivateKeyBundle> {
-    const encrypted = proto.EncryptedPrivateKeyBundle.decode(bytes)
-    if (!encrypted.v1?.walletPreKey) {
+    const eBundle = getEncryptedV1Bundle(bytes)
+
+    if (!eBundle) {
+      throw new Error('invalid bundle version')
+    }
+
+    if (!eBundle.walletPreKey) {
       throw new Error('missing wallet pre-key')
     }
     const secret = hexToBytes(
       await wallet.signMessage(
-        PrivateKeyBundle.storageSigRequestText(encrypted.v1.walletPreKey)
+        PrivateKeyBundle.storageSigRequestText(eBundle.walletPreKey)
       )
     )
-    if (!encrypted.v1?.ciphertext?.aes256GcmHkdfSha256) {
+    if (!eBundle?.ciphertext?.aes256GcmHkdfSha256) {
       throw new Error('missing bundle ciphertext')
     }
-    const ciphertext = new Ciphertext(encrypted.v1.ciphertext)
+    const ciphertext = new Ciphertext(eBundle.ciphertext)
     const decrypted = await decrypt(ciphertext, secret)
-    const bundle = proto.PrivateKeyBundle.decode(decrypted)
-    if (!bundle.v1?.identityKey) {
+    const bundle = getPrivateV1Bundle(decrypted)
+
+    if (!bundle) {
+      throw new Error('could not decode bundle')
+    }
+
+    if (!bundle.identityKey) {
       throw new Error('missing identity key')
     }
-    if (bundle.v1?.preKeys.length === 0) {
+    if (bundle.preKeys.length === 0) {
       throw new Error('missing pre-keys')
     }
     return new PrivateKeyBundle(
-      new PrivateKey(bundle.v1.identityKey),
-      bundle.v1.preKeys.map((protoKey) => new PrivateKey(protoKey))
+      new PrivateKey(bundle.identityKey),
+      bundle.preKeys.map((protoKey) => new PrivateKey(protoKey))
     )
   }
+}
+function getEncryptedV1Bundle(
+  bytes: Uint8Array
+): proto.EncryptedPrivateKeyBundleV1 | undefined {
+  try {
+    const b = proto.EncryptedPrivateKeyBundle.decode(bytes)
+    return b.v1
+  } catch (e) {
+    if (e instanceof RangeError) {
+      // Adds a default fallback for older versions of the proto
+      return proto.EncryptedPrivateKeyBundleV1.decode(bytes)
+    }
+  }
+
+  return undefined
+}
+
+function getPrivateV1Bundle(
+  bytes: Uint8Array
+): proto.PrivateKeyBundleV1 | undefined {
+  try {
+    const b = proto.PrivateKeyBundle.decode(bytes)
+    return b.v1
+  } catch (e) {
+    if (e instanceof RangeError) {
+      // Adds a default fallback for older versions of the proto
+      return proto.PrivateKeyBundleV1.decode(bytes)
+    }
+  }
+
+  return undefined
 }

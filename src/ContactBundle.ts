@@ -22,44 +22,37 @@ export default class ContactBundle implements proto.ContactBundleV1 {
   }
 
   static fromBytes(bytes: Uint8Array): ContactBundle {
-    let decoded: proto.ContactBundle | undefined
-    try {
-      decoded = proto.ContactBundle.decode(bytes)
-    } catch (e) {
-      if (e instanceof RangeError) {
-        return this.fromBytesLegacy(bytes)
-      }
+    const bundle = this.decodeV1(bytes)
 
-      // Re-throw other errors
-      throw e
+    if (!bundle) {
+      throw new Error('could not parse bundle')
     }
 
-    if (!decoded.v1?.keyBundle?.identityKey) {
+    if (!bundle.identityKey) {
       throw new Error('missing keyBundle')
     }
-    if (!decoded.v1?.keyBundle?.preKey) {
+    if (!bundle.preKey) {
       throw new Error('missing pre-key')
     }
     return new ContactBundle(
       new PublicKeyBundle(
-        new PublicKey(decoded.v1?.keyBundle?.identityKey),
-        new PublicKey(decoded.v1?.keyBundle?.preKey)
+        new PublicKey(bundle.identityKey),
+        new PublicKey(bundle.preKey)
       )
     )
   }
 
-  private static fromBytesLegacy(bytes: Uint8Array): ContactBundle {
-    const keyBundle = proto.PublicKeyBundle.decode(bytes)
-
-    if (!keyBundle?.preKey || !keyBundle?.identityKey) {
-      throw new Error('bad legacy key bundle')
+  static decodeV1(bytes: Uint8Array): proto.PublicKeyBundle | undefined {
+    try {
+      const b = proto.ContactBundle.decode(bytes)
+      return b.v1?.keyBundle
+    } catch (e) {
+      if (e instanceof RangeError) {
+        // Adds a default fallback for older versions of the proto
+        return proto.PublicKeyBundle.decode(bytes)
+      }
     }
 
-    return new ContactBundle(
-      new PublicKeyBundle(
-        new PublicKey(keyBundle?.identityKey),
-        new PublicKey(keyBundle?.preKey)
-      )
-    )
+    return undefined
   }
 }
