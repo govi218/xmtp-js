@@ -14,10 +14,8 @@ export default class ContactBundle implements proto.ContactBundleV1 {
   }
 
   toBytes(): Uint8Array {
-    return proto.ContactBundle.encode({
-      v1: {
-        keyBundle: this.keyBundle,
-      },
+    return proto.ContactBundleV1.encode({
+      keyBundle: this.keyBundle,
     }).finish()
   }
 
