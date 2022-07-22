@@ -11,6 +11,11 @@ module.exports = {
     libraryTarget: 'umd',
     globalObject: 'this',
   },
+  plugins: [
+    new webpack.ProvidePlugin({
+      process: 'process/browser',
+    }),
+  ],
   module: {
     rules: [
       {
@@ -36,5 +41,9 @@ module.exports = {
       path: false,
       util: false,
     },
+    alias: {
+      process: "process/browser",
+      "node-localstorage": false
+    }
   },
 }

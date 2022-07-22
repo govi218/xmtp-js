@@ -66,6 +66,7 @@
     "ethers": "^5.5.3",
     "js-waku": "^0.24.0",
     "node-localstorage": "^2.2.1",
+    "process": "^0.11.10",
     "protobufjs": "^6.11.3"
   },
   "devDependencies": {
